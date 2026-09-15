@@ -243,7 +243,7 @@ export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object
       `已选择工作目录：\`${escapeCode(options.cwd)}\`\n\n` +
       '请选择 Codex CLI profile，以及要创建新会话还是恢复历史会话。' +
       (options.routesToProjectGroup
-        ? '继续后会进入该路径的专属项目群；已有群会直接复用且不会重命名。'
+        ? '继续后会进入该路径的专属项目群；已有群会直接复用且不会重命名。如需并行处理同一目录，可选择新建群。'
         : '此卡片不会自动启动 Codex。'),
     ),
     {
@@ -270,7 +270,7 @@ export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object
           ? [
               {
                 tag: 'markdown',
-                content: '**项目群名称（仅首次创建时生效）**\n_可直接修改；已有路径群会原样复用。_',
+                content: '**项目群名称（新建时生效）**\n_可直接修改；普通“继续”会原样复用已有路径群。_',
               },
               {
                 tag: 'input',
@@ -299,6 +299,15 @@ export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object
           form_action_type: 'submit',
           behaviors: [{ type: 'callback', value: { cmd: 'ws.launch' } }],
         },
+        ...(options.routesToProjectGroup
+          ? [{
+              tag: 'button',
+              name: 'launch_new_chat_btn',
+              text: { tag: 'plain_text', content: '➕ 新建群并继续' },
+              form_action_type: 'submit',
+              behaviors: [{ type: 'callback', value: { cmd: 'ws.launch-new-chat' } }],
+            }]
+          : []),
         {
           tag: 'button',
           name: 'resume_btn',

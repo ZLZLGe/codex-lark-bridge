@@ -1688,6 +1688,8 @@ async function handleWs(args: string, ctx: CommandContext): Promise<void> {
       return handleWsUse(name, ctx);
     case 'launch':
       return handleWorkspaceLaunch(name, ctx);
+    case 'launch-new-chat':
+      return handleWorkspaceLaunch(name, ctx, true);
     case 'new':
       return handleWorkspaceQuickLaunch('new', ctx);
     case 'resume':
@@ -1835,7 +1837,11 @@ async function discoverCommandCodexProfiles(
   }
 }
 
-async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise<void> {
+async function handleWorkspaceLaunch(
+  args: string,
+  ctx: CommandContext,
+  forceNewProjectChat = false,
+): Promise<void> {
   if (ctx.agent.id !== 'codex') return;
   const parts = args.trim().split(/\s+/).filter(Boolean);
   const rawProfile = String(ctx.formValue?.codex_profile ?? parts[0] ?? '').trim();
@@ -1851,7 +1857,12 @@ async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise
     await reply(ctx, '当前工作目录不存在，请重新使用 `/cd <path>`。');
     return;
   }
-  const project = await resolveProjectChat(ctx, cwd, requestedProjectChatName);
+  const project = await resolveProjectChat(
+    ctx,
+    cwd,
+    requestedProjectChatName,
+    forceNewProjectChat,
+  );
   if (!project) return;
 
   let launchCtx = ctx;
@@ -1937,17 +1948,18 @@ async function resolveProjectChat(
   ctx: CommandContext,
   cwd: string,
   requestedName?: string,
+  forceCreate = false,
 ): Promise<ResolvedProjectChat | undefined> {
   // A slow Feishu callback can be retried before the first createChat call
   // returns. Serialize resolutions for this bridge profile/app, operator and
   // canonical path so retries observe the same in-flight result instead of
   // creating a second group. Keep the operator in the key because a project
   // group is private and initially contains only its requesting user.
-  const key = `${ctx.controls.profile}\u0000${ctx.controls.cfg.accounts.app.id}\u0000${ctx.msg.senderId}\u0000${cwd}`;
+  const key = `${ctx.controls.profile}\u0000${ctx.controls.cfg.accounts.app.id}\u0000${ctx.msg.senderId}\u0000${cwd}\u0000${forceCreate ? 'force' : 'reuse'}`;
   const pending = projectChatResolutions.get(key);
   if (pending) return pending;
 
-  const resolution = resolveProjectChatInternal(ctx, cwd, requestedName);
+  const resolution = resolveProjectChatInternal(ctx, cwd, requestedName, forceCreate);
   projectChatResolutions.set(key, resolution);
   try {
     return await resolution;
@@ -1960,13 +1972,14 @@ async function resolveProjectChatInternal(
   ctx: CommandContext,
   cwd: string,
   requestedName?: string,
+  forceCreate = false,
 ): Promise<ResolvedProjectChat | undefined> {
   const currentPath = ctx.chatMode === 'group'
     ? ctx.workspaces.projectPathForChat(ctx.msg.chatId)
     : undefined;
   const mapped = ctx.workspaces.projectChatFor(cwd);
 
-  if (ctx.chatMode === 'group' && (!currentPath || currentPath === cwd)) {
+  if (!forceCreate && ctx.chatMode === 'group' && (!currentPath || currentPath === cwd)) {
     if (!mapped || mapped.chatId === ctx.msg.chatId) {
       const name = mapped?.name
         ?? ctx.controls.knownChats?.find((chat) => chat.id === ctx.msg.chatId)?.name
@@ -1978,7 +1991,7 @@ async function resolveProjectChatInternal(
     }
   }
 
-  if (mapped) {
+  if (!forceCreate && mapped) {
     try {
       const live = await getProjectChatInfo(ctx.channel, mapped.chatId);
       const members = await getProjectChatMembers(ctx.channel, mapped.chatId);

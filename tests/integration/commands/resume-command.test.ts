@@ -73,6 +73,7 @@ interface Harness {
       chatId?: string;
       chatMode?: 'p2p' | 'group' | 'topic';
       projectChatName?: string;
+      forceNewProjectChat?: boolean;
     },
   ): Promise<void>;
   dispatchProfile(profile: string): Promise<void>;
@@ -603,7 +604,8 @@ describe('agent-aware resume commands', () => {
     expect(card).toContain('选择 Codex 启动方式');
     expect(card).toContain('freerouter');
     expect(card).toContain('默认配置（不传 --profile）');
-    expect(card).toContain('项目群名称（仅首次创建时生效）');
+    expect(card).toContain('项目群名称（新建时生效）');
+    expect(card).toContain('新建群并继续');
     expect(card).toContain('Codex 项目群｜next-workspace');
     expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
     expect(h.workspaces.selectionFor('chat-1')?.launchMode).toBeUndefined();
@@ -655,6 +657,40 @@ describe('agent-aware resume commands', () => {
       chatId: 'oc_project_1',
       name: '桥接器研发项目群',
     });
+  });
+
+  it('新建群按钮为同一路径创建并行项目群，普通继续仍复用最新群', async () => {
+    const h = await createHarness('codex');
+    const cwd = await realpath(h.tmp.workspace);
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new', {
+      forceNewProjectChat: true,
+      projectChatName: '并行任务群',
+    });
+
+    expect(h.projectChats.createCalls).toBe(2);
+    expect(h.projectChats.chats.map((chat) => chat.id)).toEqual([
+      'oc_project_1',
+      'oc_project_2',
+    ]);
+    expect(h.workspaces.selectionFor('oc_project_1')?.cwd).toBe(cwd);
+    expect(h.workspaces.selectionFor('oc_project_2')?.cwd).toBe(cwd);
+    expect(h.workspaces.projectChatFor(cwd)).toEqual({
+      chatId: 'oc_project_2',
+      name: '并行任务群',
+    });
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+
+    expect(h.projectChats.createCalls).toBe(2);
+    expect(h.channel.sent.some((entry) =>
+      entry.chatId === 'oc_project_2'
+      && JSON.stringify(entry.content).includes('🔁 已复用项目群'),
+    )).toBe(true);
   });
 
   it('deduplicates concurrent project-group launch callbacks and announces reuse in the group', async () => {
@@ -1637,6 +1673,7 @@ async function createHarness(
       chatId?: string;
       chatMode?: 'p2p' | 'group' | 'topic';
       projectChatName?: string;
+      forceNewProjectChat?: boolean;
     } = {},
   ): Promise<void> => {
     const chatId = dispatchOptions.chatId ?? 'chat-1';
@@ -1644,7 +1681,7 @@ async function createHarness(
     return handleCardAction({
       channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
       evt: cardEvent(
-        { cmd: 'ws.launch' },
+        { cmd: dispatchOptions.forceNewProjectChat ? 'ws.launch-new-chat' : 'ws.launch' },
         {
           codex_profile: profile,
           launch_mode: mode,

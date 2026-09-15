@@ -71,7 +71,7 @@ lark-channel-bridge run --app-id cli_xxx --tenant lark
 请检查这个项目的测试失败原因，并给出修复方案。
 ```
 
-Claude 会切换目录并开始新会话。Codex 会先显示启动卡，让你选择 Codex CLI profile，以及新建还是恢复 thread；从私聊继续时，Bridge 会进入该路径的专属项目群。
+Claude 会切换目录并开始新会话。Codex 会先显示启动卡，让你选择 Codex CLI profile，以及新建还是恢复 thread；从私聊普通继续时，Bridge 会复用该路径现有的专属项目群，也可以点击“新建群并继续”为同一目录创建并行项目群。
 
 ## 消息从哪里进入
 

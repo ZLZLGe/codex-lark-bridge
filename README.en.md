@@ -31,7 +31,7 @@ In Feishu:
 Review the failing tests and propose a fix.
 ```
 
-DMs do not need an @ mention. Groups and topic groups require `@bot` by default. Each chat, topic, and cloud-doc comment thread has an isolated session and working directory. Images and files can be attached to a task.
+DMs do not need an @ mention. Groups and topic groups require `@bot` by default. Each chat, topic, and cloud-doc comment thread has an isolated session and working directory. After `/cd` in a DM, the launch card reuses the path's existing project group by default; choose **Create new group and continue** to run parallel tasks for the same directory in a separate group. Images and files can be attached to a task.
 
 Cloud-doc comments are document-scoped: mention the bot in a supported document comment and the reply stays in that comment thread; no separate workspace binding is needed.
 

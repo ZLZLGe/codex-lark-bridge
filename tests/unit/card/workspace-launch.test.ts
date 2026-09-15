@@ -52,6 +52,18 @@ describe('Codex workspace launch cards', () => {
     });
 
     expect(actions(card)).toContainEqual({ cmd: 'ws.resume' });
+    expect(actions(card)).toContainEqual({ cmd: 'ws.launch-new-chat' });
+    expect(textContent(card)).toContain('并行处理同一目录');
+  });
+
+  it('does not offer project-group creation inside an existing group', () => {
+    const card = workspaceLaunchCard({
+      cwd: '/data/project',
+      profiles: [],
+      routesToProjectGroup: false,
+    });
+
+    expect(actions(card)).not.toContainEqual({ cmd: 'ws.launch-new-chat' });
   });
 
   it('renders each full Codex thread ID in a native copyable code block', () => {
