@@ -10,19 +10,21 @@ describe('buildProxyAwareTransportOptions', () => {
 
     expect(options.respectProxyEnv).toBe(false);
     expect(options.agent).toBeDefined();
-    expect(options.httpInstance).toBe(defaultHttpInstance);
+    expect(options.httpInstance).toBeDefined();
     expect(defaultHttpInstance.defaults.httpAgent).toBe(options.agent);
     expect(defaultHttpInstance.defaults.httpsAgent).toBe(options.agent);
     expect(defaultHttpInstance.defaults.proxy).toBe(false);
-    expect(defaultHttpInstance.defaults.timeout).toBe(5 * 60_000);
+    expect(defaultHttpInstance.defaults.timeout).toBe(40_000);
+    expect(options.httpTimeoutMs).toBe(40_000);
   });
 
   it('keeps the channel default path when no proxy is configured', () => {
     const options = buildProxyAwareTransportOptions({});
 
-    expect(options).toEqual({
-      httpTimeoutMs: 5 * 60_000,
+    expect(options).toMatchObject({
+      httpTimeoutMs: 40_000,
       respectProxyEnv: true,
     });
+    expect(options.httpInstance).toBeDefined();
   });
 });

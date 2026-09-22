@@ -1,8 +1,11 @@
 import type { LarkChannelOptions } from '@larksuite/channel';
 import { defaultHttpInstance } from '@larksuiteoapi/node-sdk';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-
-const HTTP_TIMEOUT_MS = 5 * 60_000;
+import { log } from '../core/logger';
+import {
+  createRetryingHttpInstance,
+  FEISHU_HTTP_TIMEOUT_MS,
+} from './retrying-http';
 
 type TransportOptions = Pick<
   LarkChannelOptions,
@@ -23,22 +26,40 @@ export function buildProxyAwareTransportOptions(
   const proxyUrl =
     env.HTTPS_PROXY ?? env.https_proxy ?? env.HTTP_PROXY ?? env.http_proxy;
 
+  // Keep the singleton's default bounded for callers that reach it directly;
+  // the wrapper below also applies the same cap to every individual attempt.
+  defaultHttpInstance.defaults.timeout = FEISHU_HTTP_TIMEOUT_MS;
+  const httpInstance = createRetryingHttpInstance(defaultHttpInstance, {
+    onRetry: ({ retry, maxRetries, delayMs, method, endpoint, status, code }) => {
+      log.warn('network', 'outbound-http-retry', {
+        retry,
+        maxRetries,
+        delayMs,
+        method,
+        endpoint,
+        status,
+        code,
+      });
+    },
+  });
+
   if (!proxyUrl) {
     return {
-      httpTimeoutMs: HTTP_TIMEOUT_MS,
+      httpInstance,
+      httpTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
       respectProxyEnv: true,
     };
   }
 
   const agent = new HttpsProxyAgent(proxyUrl);
-  defaultHttpInstance.defaults.timeout = HTTP_TIMEOUT_MS;
   defaultHttpInstance.defaults.httpAgent = agent;
   defaultHttpInstance.defaults.httpsAgent = agent;
   defaultHttpInstance.defaults.proxy = false;
 
   return {
     agent,
-    httpInstance: defaultHttpInstance,
+    httpInstance,
+    httpTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
     respectProxyEnv: false,
   };
 }

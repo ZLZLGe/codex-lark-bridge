@@ -258,6 +258,10 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     includeRawEvent: true,
     outbound: {
       streamThrottleMs: 400,
+      // The bridge's HTTP transport owns the complete 20-retry budget for
+      // sends and stream updates. Disable the SDK's nested send retry so one
+      // failing request cannot multiply into 3 x 20 attempts.
+      retry: { maxAttempts: 1 },
     },
     // SDK 1.65.0-alpha.3+ knobs.
     wsConfig: {
