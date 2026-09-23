@@ -49,7 +49,7 @@ Every command has a concrete example and a visible result. Use `/help` in Feishu
 | `/ws use` | `/ws use backend` | Switches to a named workspace; Codex asks for profile and new/resume. |
 | `/ws remove` | `/ws remove backend` | Removes the alias without touching files. |
 | `/new`, `/clear`, `/reset` | `/new` | Starts a fresh session in the current scope; if a prior Codex thread exists, its full ID is reported in a separate message first. |
-| `/resume` | `/resume 2` | Shows page 2 of compatible history, lets you restore a thread, and choose whether to post its history. |
+| `/resume` | `/resume 2` | Shows page 2 of history for the current path. Codex groups bound to that workspace, including parallel groups for the same path, can restore a thread and choose whether to post its history. |
 | `/new chat` | `/new chat Release check` | Creates or reuses a Codex project group for the current path and starts a new thread. |
 | `/profile` | `/profile` | Selects the Codex CLI profile for a DM or project group. |
 | `/attach` | `/attach` | Prints the exact `codex --remote ... resume ...` command for the same thread. |

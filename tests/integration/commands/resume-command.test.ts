@@ -549,8 +549,8 @@ describe('agent-aware resume commands', () => {
     expect(lastMarkdown(h.channel)).not.toContain('读取历史记录失败');
   });
 
-  it('keeps Codex resume history details out of group chats like Claude', async () => {
-    const h = await createHarness('codex');
+  it('keeps Codex resume history details out of groups without a bound workspace', async () => {
+    const h = await createHarness('codex', { bindWorkspace: false });
     h.codexHistory.push(codexThread('thread-alpha-secret', 'alpha prompt', 1_700_000_100_000));
 
     await expect(h.run('/resume', { chatMode: 'group' })).resolves.toBe(true);
@@ -559,6 +559,23 @@ describe('agent-aware resume commands', () => {
     expect(rendered).toContain('私聊');
     expect(rendered).not.toContain('alpha prompt');
     expect(rendered).not.toContain('thread-alpha-secret');
+  });
+
+  it('resumes a thread from an older parallel Codex group bound to the current path', async () => {
+    const h = await createHarness('codex');
+    const cwd = await realpath(h.tmp.workspace);
+    h.workspaces.setProjectChat(cwd, { chatId: 'oc_newer_project', name: 'Newer project group' });
+    h.codexHistory.push(codexThread('thread-for-current-path', 'current path prompt', 1_700_000_100_000));
+
+    await expect(h.run('/resume', { chatMode: 'group' })).resolves.toBe(true);
+
+    const card = lastContent(h.channel);
+    expect(JSON.stringify(card)).toContain('current path prompt');
+    expect(h.codexHistoryRequests[0]?.cwd).toBe(cwd);
+    const [nonce] = resumeArgsFromCard(card);
+    await expect(h.run(`/resume use ${nonce}`, { chatMode: 'group' })).resolves.toBe(true);
+
+    expect(h.catalog.activeFor(h.identity)?.threadId).toBe('thread-for-current-path');
   });
 
   it('用中文状态标签展示 Codex 会话和已记录的 thread id', async () => {

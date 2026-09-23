@@ -103,7 +103,7 @@ Cloud-doc comments are document-scoped：云文档评论按文档权限生效，
 | `/new` | `/new` | 中断当前任务，清空当前私聊、群或话题的会话，下一条消息从全新会话开始；若存在旧 Codex thread，会先用单独一条消息报告其完整 ID。 |
 | `/clear` | `/clear` | `/new` 的同义命令。 |
 | `/reset` | `/reset` | `/new` 的同义命令。 |
-| `/resume` | `/resume 2` | 打开第 2 页历史会话；点选某项后恢复，再按卡片选择是否发送历史上下文。 |
+| `/resume` | `/resume 2` | 打开第 2 页当前路径的历史会话；Codex 已绑定工作目录的群（包括同一路径的并行群）可直接选择并恢复 thread，再选择是否发送历史上下文。 |
 | `/new chat` | `/new chat 发布检查` | Codex 下按当前路径创建或复用专属项目群，并创建新的 thread。 |
 | `/profile` | `/profile` | Codex 私聊中选择 Bot 默认 CLI profile；项目群中选择该群 profile，并继续新建或恢复会话。 |
 | `/attach` | `/attach` | 输出 `codex --remote ... resume ...` 命令；在本机终端运行后，终端和飞书共享同一个 thread。 |

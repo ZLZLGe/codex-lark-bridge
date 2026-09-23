@@ -2255,10 +2255,11 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     return;
   }
 
-  const isManagedProjectGroup =
-    ctx.chatMode === 'group'
-    && ctx.workspaces.projectChatFor(cwd)?.chatId === ctx.msg.chatId;
-  if (ctx.chatMode !== 'p2p' && !isManagedProjectGroup) {
+  const isBoundCodexGroup =
+    ctx.controls.profileConfig.agentKind === 'codex'
+    && ctx.chatMode === 'group'
+    && ctx.workspaces.cwdFor(ctx.scope) === cwd;
+  if (ctx.chatMode !== 'p2p' && !isBoundCodexGroup) {
     await reply(ctx, '群聊中不展示历史会话详情。请私聊 bot 使用 `/resume` 查看和选择历史会话。');
     return;
   }
