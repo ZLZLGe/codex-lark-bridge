@@ -52,7 +52,12 @@ export function createOwnerRefreshController(
 
   return {
     async start(): Promise<void> {
-      await refreshOwnerControls(opts.controls, opts.source, opts.appId);
+      // Codex startup already reads this owner from the application-scope
+      // response. Keep that verified result instead of querying the same API
+      // again before the bot can accept messages.
+      if (opts.controls.ownerRefreshState !== 'ok' || !opts.controls.botOwnerId) {
+        await refreshOwnerControls(opts.controls, opts.source, opts.appId);
+      }
       timer = setInterval(() => {
         void refreshOwnerControls(opts.controls, opts.source, opts.appId);
       }, intervalMs);

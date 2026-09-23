@@ -283,7 +283,13 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
   // the websocket. A Codex profile must never briefly accept events with a
   // permission set that cannot create/reuse its project groups.
   if (agent.id === 'codex') {
-    await requireProjectChatScopes(channel, cfg.accounts.app.id);
+    const ownerId = await requireProjectChatScopes(channel, cfg.accounts.app.id);
+    if (ownerId) {
+      controls.botOwnerId = ownerId;
+      controls.ownerRefreshState = 'ok';
+      controls.ownerRefreshedAt = Date.now();
+      log.info('access', 'owner-resolved-from-app-info', { appId: cfg.accounts.app.id });
+    }
   }
   const media = new MediaCache(channel, deps.appPaths?.mediaDir);
 

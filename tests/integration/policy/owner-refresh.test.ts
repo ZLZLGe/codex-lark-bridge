@@ -71,6 +71,22 @@ describe('owner refresh', () => {
 
     controller.stop();
   });
+
+  it('uses the owner already fetched during startup without querying twice', async () => {
+    vi.useFakeTimers();
+    const controls: RuntimeControls = { botOwnerId: 'ou_owner', ownerRefreshState: 'ok' };
+    const source = fakeAppInfoSource(['ou_new_owner']);
+    const controller = createOwnerRefreshController({ controls, source, appId: 'cli_test' });
+
+    await controller.start();
+    expect(source.calls).toBe(0);
+    expect(isCreator(controls, 'ou_owner')).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    expect(source.calls).toBe(1);
+    expect(isCreator(controls, 'ou_new_owner')).toBe(true);
+    controller.stop();
+  });
 });
 
 function fakeAppInfoSource(results: Array<string | Error>): AppInfoSource & { calls: number } {

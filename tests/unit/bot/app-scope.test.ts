@@ -5,14 +5,14 @@ import {
   requireProjectChatScopes,
 } from '../../../src/bot/app-scope.js';
 
-function channelWithScopes(scopes: string[]): LarkChannel {
+function channelWithScopes(scopes: string[], ownerId?: string): LarkChannel {
   return {
     rawClient: {
       application: {
         v6: {
           application: {
             get: vi.fn(async () => ({
-              data: { app: { scopes: scopes.map((scope) => ({ scope })) } },
+              data: { app: { scopes: scopes.map((scope) => ({ scope })), owner: { owner_id: ownerId } } },
             })),
           },
         },
@@ -33,10 +33,10 @@ describe('app scope checks', () => {
   it('accepts the project-group scopes needed by Codex', async () => {
     await expect(
       requireProjectChatScopes(
-        channelWithScopes(['im:chat', 'im:chat.members:read']),
+        channelWithScopes(['im:chat', 'im:chat.members:read'], 'ou_owner'),
         'cli_test',
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe('ou_owner');
   });
 
   it('rejects startup when create or member-read scope is missing', async () => {

@@ -45,13 +45,25 @@ export async function fetchGrantedScopes(
   channel: LarkChannel,
   appId: string,
 ): Promise<Set<string> | null> {
+  const app = await fetchAppAccessInfo(channel, appId);
+  return app?.scopes ?? null;
+}
+
+async function fetchAppAccessInfo(
+  channel: LarkChannel,
+  appId: string,
+): Promise<{ scopes: Set<string>; ownerId?: string } | null> {
   try {
     const res = await channel.rawClient.application.v6.application.get({
       params: { lang: 'zh_cn', user_id_type: 'open_id' },
       path: { app_id: appId },
     });
     const scopes = res.data?.app?.scopes ?? [];
-    return new Set(scopes.map((s) => s.scope));
+    const ownerId = res.data?.app?.owner?.owner_id;
+    return {
+      scopes: new Set(scopes.map((s) => s.scope)),
+      ...(ownerId ? { ownerId } : {}),
+    };
   } catch (err) {
     log.warn('app-scope', 'fetch-failed', {
       err: err instanceof Error ? err.message : String(err),
@@ -81,15 +93,16 @@ export async function hasGroupMsgScope(
 export async function requireProjectChatScopes(
   channel: LarkChannel,
   appId: string,
-): Promise<void> {
-  const scopes = await fetchGrantedScopes(channel, appId);
-  if (scopes === null) {
+): Promise<string | undefined> {
+  const app = await fetchAppAccessInfo(channel, appId);
+  if (app === null) {
     throw new Error(
       `无法确认飞书应用身份权限（app ${appId}）。机器人应用权限不能由 bridge 或 lark-cli auth login 自动提权，` +
       `请在飞书开发者后台开通项目群所需权限后重启 bridge：${appScopeConsoleUrl(appId)}`,
     );
   }
 
+  const scopes = app.scopes;
   const missing: string[] = [];
   if (!scopes.has(PROJECT_CHAT_CREATE_SCOPE)) {
     missing.push(PROJECT_CHAT_CREATE_SCOPE);
@@ -103,4 +116,5 @@ export async function requireProjectChatScopes(
       `请在飞书开发者后台为 app ${appId} 开通后重启 bridge：${appScopeConsoleUrl(appId)}`,
     );
   }
+  return app.ownerId;
 }
