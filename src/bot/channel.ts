@@ -28,6 +28,7 @@ import {
   markIdleTimeout,
   markInterrupted,
   reduce,
+  type Block,
   type RunState,
 } from '../card/run-state';
 import { renderText } from '../card/text-renderer';
@@ -84,6 +85,10 @@ const DEBOUNCE_MS = 600;
 const STREAM_TERMINAL_GRACE_MS = 3000;
 const REACTION_CLEANUP_GRACE_MS = 1000;
 const GOAL_TIMER_REFRESH_MS = 1000;
+// IM card messages are rejected around 30 KB. Count the actual patch request
+// body and leave room for Feishu's serialization and the continuation marker.
+const MAX_PROGRESS_CARD_PATCH_BYTES = 24_000;
+const CARD_EVENT_CHUNK_CHARS = 2_000;
 
 const BRIDGE_AGENT_INSTRUCTIONS = [
   '你在 bridge 进程中运行，普通 lark-cli 会继承 LARK_CHANNEL=1 并进入 bridge-bound 模式。',
@@ -1327,6 +1332,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         state: RunState;
         progress: LazyProgressStream;
         producerStarted: boolean;
+        waitForStart(): Promise<void>;
         update(): Promise<void>;
       }
       const segments: CardProgressSegment[] = [];
@@ -1337,6 +1343,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           | { update(next: object | ((current: object) => object)): Promise<void> }
           | undefined;
         let updateTail = Promise.resolve();
+        let signalStarted!: () => void;
+        const started = new Promise<void>((resolve) => { signalStarted = resolve; });
         const segment = {} as CardProgressSegment;
         const safeCardUpdate = createSafeProgressUpdate(
           scope,
@@ -1353,6 +1361,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
                 initial: renderCard(filterForPrefs(segment.state), cardRenderOptions),
                 producer: async (ctrl) => {
                   segment.producerStarted = true;
+                  signalStarted();
                   if (progress.abandoned()) return;
                   cardCtrl = ctrl;
                   await segment.update();
@@ -1374,6 +1383,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           state: initialState,
           progress,
           producerStarted: false,
+          waitForStart: async (): Promise<void> => {
+            // sendInitial finishes before the producer starts. Preserve card
+            // order when one large delta opens several cards in quick succession.
+            await Promise.race([started, progress.settled.then(() => {}, () => {})]);
+          },
           update: async (): Promise<void> => {
             const card = renderCard(filterForPrefs(segment.state), cardRenderOptions);
             updateTail = updateTail.then(() => safeCardUpdate(card));
@@ -1412,11 +1426,25 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
               replyTo: split.replyTo,
             });
           }
-          currentSegment.state = advanceSegmentState(currentSegment.state, state, event);
-          if (shouldOpenProgressStream(filterForPrefs(currentSegment.state), true)) {
-            currentSegment.progress.ensureOpen();
+          for (const part of splitCardEvent(event)) {
+            const next = advanceSegmentState(currentSegment.state, state, part);
+            if (
+              currentSegment.progress.opened()
+              && cardPatchBytes(renderCard(filterForPrefs(next), cardRenderOptions))
+                > MAX_PROGRESS_CARD_PATCH_BYTES
+            ) {
+              await currentSegment.waitForStart();
+              currentSegment.state = markContinued(currentSegment.state);
+              await currentSegment.update();
+              currentSegment = createSegment(finalSendOpts);
+              log.info('outbound', 'progress-card-rollover', { scope, mode: replyMode });
+            }
+            currentSegment.state = advanceSegmentState(currentSegment.state, state, part);
+            if (shouldOpenProgressStream(filterForPrefs(currentSegment.state), true)) {
+              currentSegment.progress.ensureOpen();
+            }
+            await currentSegment.update();
           }
-          await currentSegment.update();
         },
       );
       try {
@@ -1817,13 +1845,20 @@ async function sendFinalReply(input: {
   }
 
   if (input.replyMode === 'card') {
-    const result = await input.channel.send(
-      input.chatId,
-      { card: renderCard(input.state, input.cardRenderOptions) },
-      input.sendOpts,
-    );
-    requireMessageReceipt(result, 'card');
-    log.info('outbound', 'sent', outboundLogFields(input, 'card', body, result));
+    const pages = paginateFinalCard(input.state, input.cardRenderOptions);
+    for (const [index, page] of pages.entries()) {
+      const result = await input.channel.send(
+        input.chatId,
+        { card: renderCard(page, input.cardRenderOptions) },
+        input.sendOpts,
+      );
+      requireMessageReceipt(result, 'card');
+      log.info('outbound', 'sent', {
+        ...outboundLogFields(input, 'card', renderText(page), result),
+        page: index + 1,
+        pages: pages.length,
+      });
+    }
   } else if (input.replyMode === 'markdown') {
     if (body.trim()) {
       const result = await input.channel.send(
@@ -1923,6 +1958,95 @@ function createSafeProgressUpdate<T>(
       });
     }
   };
+}
+
+function cardPatchBytes(card: object): number {
+  return Buffer.byteLength(JSON.stringify({ content: JSON.stringify(card) }), 'utf8');
+}
+
+function paginateFinalCard(state: RunState, options: RunCardRenderOptions): RunState[] {
+  if (cardPatchBytes(renderCard(state, options)) <= MAX_PROGRESS_CARD_PATCH_BYTES) {
+    return [state];
+  }
+  const base: RunState = {
+    ...state,
+    blocks: [],
+    reasoning: { content: '', active: false },
+    goal: undefined,
+    plan: undefined,
+  };
+  const pages: RunState[] = [];
+  let page = base;
+  for (const block of state.blocks) {
+    for (const part of splitCardBlock(block)) {
+      const next = { ...page, blocks: [...page.blocks, part] };
+      if (
+        page.blocks.length > 0
+        && cardPatchBytes(renderCard(next, options)) > MAX_PROGRESS_CARD_PATCH_BYTES
+      ) {
+        pages.push(markContinued(page));
+        page = { ...base, blocks: [part] };
+      } else {
+        page = next;
+      }
+    }
+  }
+  const withStatus = { ...page, goal: state.goal, plan: state.plan };
+  if (
+    page.blocks.length > 0
+    && cardPatchBytes(renderCard(withStatus, options)) > MAX_PROGRESS_CARD_PATCH_BYTES
+  ) {
+    pages.push(markContinued(page));
+    page = { ...base, goal: state.goal, plan: state.plan };
+  } else {
+    page = withStatus;
+  }
+  pages.push(page);
+  return pages;
+}
+
+function* splitCardBlock(block: Block): Generator<Block> {
+  if (block.kind !== 'text' && block.kind !== 'user') {
+    yield block;
+    return;
+  }
+  for (const content of chunkCardText(block.content)) {
+    yield { ...block, content };
+  }
+}
+
+function* chunkCardText(content: string): Generator<string> {
+  if (content.length <= CARD_EVENT_CHUNK_CHARS) {
+    yield content;
+    return;
+  }
+  let chunk = '';
+  for (const char of content) {
+    if (chunk.length + char.length > CARD_EVENT_CHUNK_CHARS) {
+      yield chunk;
+      chunk = '';
+    }
+    chunk += char;
+  }
+  if (chunk) yield chunk;
+}
+
+/** Keep one large agent delta from crossing the card limit before rollover can run. */
+function* splitCardEvent(event: AgentEvent | undefined): Generator<AgentEvent | undefined> {
+  if (!event || (event.type !== 'text' && event.type !== 'user_text')) {
+    yield event;
+    return;
+  }
+  const content = event.type === 'text' ? event.delta : event.content;
+  if (content.length <= CARD_EVENT_CHUNK_CHARS) {
+    yield event;
+    return;
+  }
+  for (const chunk of chunkCardText(content)) {
+    yield event.type === 'text'
+      ? { type: 'text', delta: chunk }
+      : { type: 'user_text', content: chunk };
+  }
 }
 
 /**

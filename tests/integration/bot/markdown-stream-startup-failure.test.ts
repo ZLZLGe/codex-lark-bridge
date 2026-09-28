@@ -646,6 +646,128 @@ describe('markdown stream startup failures', () => {
     );
     expect(finalReply?.options).toMatchObject({ replyTo: 'om_insert' });
   });
+
+  it('rolls a long Codex progress card into new cards without losing output', async () => {
+    const streams: Array<{ cards: unknown[]; options?: unknown; started: boolean }> = [];
+    const chunks = Array.from({ length: 20 }, (_, index) =>
+      `CHUNK_${String(index).padStart(2, '0')}_${'内容'.repeat(700)}\n`,
+    );
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'text', delta: chunks.join('') },
+        { type: 'final_text', content: 'FINAL_AFTER_ROLLOVER' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input, options) => {
+        expect(streams.every((stream) => stream.started)).toBe(true);
+        const record = { cards: [] as unknown[], options, started: false };
+        streams.push(record);
+        const card = (input as {
+          card?: {
+            initial?: unknown;
+            producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void>;
+          };
+        }).card;
+        if (card?.initial) record.cards.push(card.initial);
+        await Promise.resolve();
+        record.started = true;
+        await card?.producer?.({ update: async (next) => { record.cards.push(next); } });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_long_card', 'long run'));
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('FINAL_AFTER_ROLLOVER'));
+
+    expect(streams.length).toBeGreaterThan(1);
+    const completedCards = streams.map((stream) => stream.cards.at(-1));
+    const rendered = completedCards.map((card) => JSON.stringify(card));
+    for (let index = 0; index < chunks.length; index += 1) {
+      const marker = `CHUNK_${String(index).padStart(2, '0')}_`;
+      expect(rendered.filter((card) => card.includes(marker))).toHaveLength(1);
+    }
+    expect(rendered.slice(0, -1).every((card) => card.includes('已在下方接续'))).toBe(true);
+    expect(completedCards.every((card) =>
+      Buffer.byteLength(JSON.stringify({ content: JSON.stringify(card) })) < 30_000
+    )).toBe(true);
+    expect(streams.every((stream) =>
+      (stream.options as { replyTo?: string })?.replyTo === 'om_long_card'
+    )).toBe(true);
+  });
+
+  it('sends an oversized final Codex answer in continuation cards', async () => {
+    const chunks = Array.from({ length: 20 }, (_, index) =>
+      `FINAL_CHUNK_${String(index).padStart(2, '0')}_${'答复'.repeat(700)}\n`,
+    );
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'final_text', content: chunks.join('') },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_long_final', 'long answer'));
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('FINAL_CHUNK_19_'));
+
+    const cards = h.channel.sent.map((entry) => entry.content as { card?: unknown });
+    expect(cards.length).toBeGreaterThan(1);
+    const rendered = cards.map((content) => JSON.stringify(content.card));
+    for (let index = 0; index < chunks.length; index += 1) {
+      const marker = `FINAL_CHUNK_${String(index).padStart(2, '0')}_`;
+      expect(rendered.filter((card) => card.includes(marker))).toHaveLength(1);
+    }
+    expect(rendered.slice(0, -1).every((card) => card.includes('已在下方接续'))).toBe(true);
+    expect(cards.every((content) =>
+      Buffer.byteLength(JSON.stringify({ content: JSON.stringify(content.card) })) < 30_000
+    )).toBe(true);
+  });
+
+  it('rolls over a card with many tool calls', async () => {
+    const streams: unknown[][] = [];
+    const tools = Array.from({ length: 240 }, (_, index) => ({
+      type: 'tool_use' as const,
+      id: `tool-${index}`,
+      name: 'Bash',
+      input: { command: `COMMAND_${String(index).padStart(3, '0')}_${'x'.repeat(68)}` },
+    }));
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        ...tools,
+        { type: 'final_text', content: 'FINAL_TOOL_ROLLOVER' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input) => {
+        const cards: unknown[] = [];
+        streams.push(cards);
+        const card = (input as {
+          card?: {
+            initial?: unknown;
+            producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void>;
+          };
+        }).card;
+        if (card?.initial) cards.push(card.initial);
+        await card?.producer?.({ update: async (next) => { cards.push(next); } });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_tool_card', 'many tools'));
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('FINAL_TOOL_ROLLOVER'));
+
+    expect(streams.length).toBeGreaterThan(1);
+    const rendered = streams.map((cards) => JSON.stringify(cards.at(-1)));
+    for (let index = 0; index < tools.length; index += 1) {
+      const marker = `COMMAND_${String(index).padStart(3, '0')}_`;
+      expect(rendered.filter((card) => card.includes(marker))).toHaveLength(1);
+    }
+    expect(streams.every((cards) =>
+      Buffer.byteLength(JSON.stringify({ content: JSON.stringify(cards.at(-1)) })) < 30_000
+    )).toBe(true);
+  });
 });
 
 async function createHarness(options: {
