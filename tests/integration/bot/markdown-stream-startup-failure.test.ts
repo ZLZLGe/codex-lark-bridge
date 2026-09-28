@@ -696,6 +696,63 @@ describe('markdown stream startup failures', () => {
     )).toBe(true);
   });
 
+  it('keeps one long user input in one collapsible panel', async () => {
+    const cards: unknown[] = [];
+    const input = `INPUT_START_${'输入'.repeat(2200)}_INPUT_END`;
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'user_text', content: input },
+        { type: 'final_text', content: 'INPUT_DONE' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, streamInput) => {
+        const card = (streamInput as {
+          card?: { producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void> };
+        }).card;
+        await card?.producer?.({ update: async (next) => { cards.push(next); } });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_long_input', 'long input'));
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('INPUT_DONE'));
+
+    const rendered = JSON.stringify(cards.at(-1));
+    expect(rendered.match(/输入，点击查看/g)).toHaveLength(1);
+    expect(rendered).toContain('INPUT_START_');
+    expect(rendered).toContain('_INPUT_END');
+    expect(rendered).not.toContain('完整输入见上方原消息');
+  });
+
+  it('shows one preview panel when the input alone exceeds a card', async () => {
+    const cards: unknown[] = [];
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'user_text', content: `INPUT_START_${'输入'.repeat(9000)}_INPUT_END` },
+        { type: 'final_text', content: 'OVERSIZED_INPUT_DONE' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, streamInput) => {
+        const card = (streamInput as {
+          card?: { producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void> };
+        }).card;
+        await card?.producer?.({ update: async (next) => { cards.push(next); } });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_oversized_input', 'oversized input'));
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('OVERSIZED_INPUT_DONE'));
+
+    const card = cards.at(-1);
+    const rendered = JSON.stringify(card);
+    expect(rendered.match(/输入，点击查看/g)).toHaveLength(1);
+    expect(rendered).toContain('完整输入见上方原消息');
+    expect(Buffer.byteLength(JSON.stringify({ content: rendered }))).toBeLessThan(30_000);
+  });
+
   it('sends an oversized final Codex answer in continuation cards', async () => {
     const chunks = Array.from({ length: 20 }, (_, index) =>
       `FINAL_CHUNK_${String(index).padStart(2, '0')}_${'答复'.repeat(700)}\n`,

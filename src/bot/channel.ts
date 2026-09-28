@@ -1427,7 +1427,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             });
           }
           for (const part of splitCardEvent(event)) {
-            const next = advanceSegmentState(currentSegment.state, state, part);
+            let next = advanceSegmentState(currentSegment.state, state, part);
             if (
               currentSegment.progress.opened()
               && cardPatchBytes(renderCard(filterForPrefs(next), cardRenderOptions))
@@ -1439,7 +1439,21 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
               currentSegment = createSegment(finalSendOpts);
               log.info('outbound', 'progress-card-rollover', { scope, mode: replyMode });
             }
-            currentSegment.state = advanceSegmentState(currentSegment.state, state, part);
+            next = advanceSegmentState(currentSegment.state, state, part);
+            if (
+              part?.type === 'user_text'
+              && cardPatchBytes(renderCard(filterForPrefs(next), cardRenderOptions))
+                > MAX_PROGRESS_CARD_PATCH_BYTES
+            ) {
+              // The source message already contains the whole input. Keep its
+              // progress-card preview in one panel even when the input itself
+              // is too large to fit in a card.
+              next = advanceSegmentState(currentSegment.state, state, {
+                type: 'user_text',
+                content: previewOversizedInput(part.content),
+              });
+            }
+            currentSegment.state = next;
             if (shouldOpenProgressStream(filterForPrefs(currentSegment.state), true)) {
               currentSegment.progress.ensureOpen();
             }
@@ -1978,7 +1992,12 @@ function paginateFinalCard(state: RunState, options: RunCardRenderOptions): RunS
   const pages: RunState[] = [];
   let page = base;
   for (const block of state.blocks) {
-    for (const part of splitCardBlock(block)) {
+    const visibleBlock = block.kind === 'user'
+      && cardPatchBytes(renderCard({ ...base, blocks: [block] }, options))
+        > MAX_PROGRESS_CARD_PATCH_BYTES
+      ? { ...block, content: previewOversizedInput(block.content) }
+      : block;
+    for (const part of splitCardBlock(visibleBlock)) {
       const next = { ...page, blocks: [...page.blocks, part] };
       if (
         page.blocks.length > 0
@@ -2006,13 +2025,18 @@ function paginateFinalCard(state: RunState, options: RunCardRenderOptions): RunS
 }
 
 function* splitCardBlock(block: Block): Generator<Block> {
-  if (block.kind !== 'text' && block.kind !== 'user') {
+  if (block.kind !== 'text') {
     yield block;
     return;
   }
   for (const content of chunkCardText(block.content)) {
     yield { ...block, content };
   }
+}
+
+function previewOversizedInput(content: string): string {
+  const preview = Array.from(content).slice(0, CARD_EVENT_CHUNK_CHARS).join('');
+  return `${preview}\n\n…（完整输入见上方原消息）`;
 }
 
 function* chunkCardText(content: string): Generator<string> {
@@ -2033,19 +2057,17 @@ function* chunkCardText(content: string): Generator<string> {
 
 /** Keep one large agent delta from crossing the card limit before rollover can run. */
 function* splitCardEvent(event: AgentEvent | undefined): Generator<AgentEvent | undefined> {
-  if (!event || (event.type !== 'text' && event.type !== 'user_text')) {
+  if (!event || event.type !== 'text') {
     yield event;
     return;
   }
-  const content = event.type === 'text' ? event.delta : event.content;
+  const content = event.delta;
   if (content.length <= CARD_EVENT_CHUNK_CHARS) {
     yield event;
     return;
   }
   for (const chunk of chunkCardText(content)) {
-    yield event.type === 'text'
-      ? { type: 'text', delta: chunk }
-      : { type: 'user_text', content: chunk };
+    yield { type: 'text', delta: chunk };
   }
 }
 
