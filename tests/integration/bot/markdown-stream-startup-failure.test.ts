@@ -82,6 +82,70 @@ afterEach(async () => {
 });
 
 describe('markdown stream startup failures', () => {
+  it.each([8, 11])('continues markdown after compaction at minute %i and renews subsequent segments', async (resumeMinute) => {
+    const minute = 60_000;
+    const realNow = Date.now.bind(Date);
+    let elapsed = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + elapsed);
+    const streams: Array<{ options?: unknown; snapshots: string[]; finished: boolean }> = [];
+    const h = await createHarness({
+      messageReply: 'markdown',
+      stream: async (_chatId, input, options) => {
+        const openedAt = Date.now();
+        const record = { options, snapshots: [] as string[], finished: false };
+        streams.push(record);
+        const producer = (input as {
+          markdown: (ctrl: { setContent(content: string): Promise<void> }) => Promise<void>;
+        }).markdown;
+        await producer({
+          setContent: async (content) => {
+            // Reproduce Feishu's silent expiry: the call resolves but the
+            // ten-minute-old card no longer displays any new content.
+            if (Date.now() - openedAt < 10 * minute) record.snapshots.push(content);
+          },
+        });
+        record.finished = true;
+      },
+    });
+    vi.spyOn(h.agent, 'run').mockImplementation((opts) => ({
+      runId: opts.runId,
+      events: (async function* (): AsyncIterable<AgentEvent> {
+        yield { type: 'text', delta: 'BEFORE_COMPACTION' };
+        await waitFor(() => streams[0]?.snapshots.some((s) => s.includes('BEFORE_COMPACTION')) === true);
+        elapsed = 7 * minute;
+        yield { type: 'tool_use', id: 'compact', name: 'context_compaction', input: {} };
+        await waitFor(() => streams[0]?.snapshots.some((s) => s.includes('context_compaction')) === true);
+        elapsed = resumeMinute * minute;
+        yield { type: 'tool_result', id: 'compact', output: 'completed', isError: false };
+        yield { type: 'text', delta: 'AFTER_COMPACTION' };
+        await waitFor(() => streams.at(-1)?.snapshots.some((s) => s.includes('AFTER_COMPACTION')) === true);
+        expect(streams[0]?.finished).toBe(true);
+        elapsed += 9 * minute;
+        yield { type: 'text', delta: 'LATER_PROGRESS' };
+        await waitFor(() => streams.at(-1)?.snapshots.some((s) => s.includes('LATER_PROGRESS')) === true);
+        yield { type: 'final_text', content: 'FINAL_AFTER_COMPACTION' };
+        yield { type: 'done', terminationReason: 'normal' };
+      })(),
+      async stop() {},
+      async waitForExit() { return true; },
+    }));
+    await startTestBridge(h);
+    await h.channel.handlers.message?.(message('om_long_task', 'long task'));
+    await waitFor(() => h.channel.sent.length === 1);
+
+    expect(streams).toHaveLength(3);
+    expect(streams.every((s) => s.finished)).toBe(true);
+    expect(streams.every((s) => (s.options as { replyTo: string }).replyTo === 'om_long_task')).toBe(true);
+    const second = streams[1]!.snapshots.join('\n');
+    expect(second).toContain('AFTER_COMPACTION');
+    expect(second).toContain('✅ **context_compaction**');
+    expect(second).not.toContain('BEFORE_COMPACTION');
+    expect(streams[2]!.snapshots.join('\n')).toContain('LATER_PROGRESS');
+    expect(streams[2]!.snapshots.join('\n')).not.toContain('AFTER_COMPACTION');
+    expect(streams.flatMap((s) => s.snapshots).join('\n')).not.toContain('FINAL_AFTER_COMPACTION');
+    expect(lastMarkdown(h.channel)).toContain('FINAL_AFTER_COMPACTION');
+  });
+
   it('forwards an ordinary Codex message without bridge prompt context', async () => {
     const h = await createHarness({
       messageReply: 'text',
@@ -870,8 +934,8 @@ function lastMarkdown(channel: FakeLarkChannel): string {
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }

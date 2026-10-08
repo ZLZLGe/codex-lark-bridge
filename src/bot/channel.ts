@@ -84,6 +84,9 @@ const DEBOUNCE_MS = 600;
 const STREAM_TERMINAL_GRACE_MS = 3000;
 const REACTION_CLEANUP_GRACE_MS = 1000;
 const GOAL_TIMER_REFRESH_MS = 1000;
+// Feishu closes native markdown streaming after ten minutes. Start a new
+// progress segment before that, or on the first event after a long silent tool.
+const MARKDOWN_STREAM_SEGMENT_MS = 8 * 60_000;
 
 const BRIDGE_AGENT_INSTRUCTIONS = [
   '你在 bridge 进程中运行，普通 lark-cli 会继承 LARK_CHANNEL=1 并进入 bridge-bound 模式。',
@@ -1462,6 +1465,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         state: RunState;
         progress: LazyProgressStream;
         producerStarted: boolean;
+        expired(): boolean;
+        finish(): void;
         update(): Promise<void>;
       }
       const segments: MarkdownProgressSegment[] = [];
@@ -1470,6 +1475,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       ): MarkdownProgressSegment => {
         let markdownCtrl: { setContent(markdown: string): Promise<void> } | undefined;
         let updateTail = Promise.resolve();
+        let openedAt: number | undefined;
+        let finish!: () => void;
+        const finished = new Promise<void>((resolve) => { finish = resolve; });
         const segment = {} as MarkdownProgressSegment;
         const safeMarkdownUpdate = createSafeProgressUpdate(
           scope,
@@ -1478,8 +1486,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             if (markdownCtrl) await markdownCtrl.setContent(content);
           },
         );
-        const progress = createLazyProgressStream(scope, replyMode, () =>
-          channel.stream(
+        const progress = createLazyProgressStream(scope, replyMode, () => {
+          openedAt = Date.now();
+          return channel.stream(
             chatId,
             {
               markdown: async (ctrl) => {
@@ -1491,19 +1500,21 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
                   if (shouldRefreshGoalClock(segment.state)) void segment.update();
                 }, GOAL_TIMER_REFRESH_MS);
                 try {
-                  await renderDone;
+                  await Promise.race([renderDone, finished]);
                 } finally {
                   clearInterval(goalTimer);
                 }
               },
             },
             segmentSendOpts,
-          ),
-        );
+          );
+        });
         Object.assign(segment, {
           state: initialState,
           progress,
           producerStarted: false,
+          expired: () => openedAt !== undefined && Date.now() - openedAt >= MARKDOWN_STREAM_SEGMENT_MS,
+          finish,
           update: async (): Promise<void> => {
             const markdown = renderText(filterForPrefs(segment.state));
             updateTail = updateTail.then(() => safeMarkdownUpdate(markdown));
@@ -1528,15 +1539,23 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         async (state, event) => {
           latestState = state;
           const split = event ? activeRuns.takePresentationSplit(scope) : undefined;
-          if (split) {
+          const expired = currentSegment.expired() && state.terminal === 'running';
+          if (split || expired) {
+            // Preserve pending tools across age-based rotation so a completion
+            // after compaction updates the continued tool instead of vanishing.
+            const pending = currentSegment.state.blocks.filter(
+              (block) => block.kind === 'tool' && block.tool.status === 'running',
+            );
             currentSegment.state = markContinued(currentSegment.state);
             await currentSegment.update();
-            finalSendOpts = split;
-            currentSegment = createSegment(split);
-            log.info('outbound', 'progress-segment-split', {
+            currentSegment.finish();
+            finalSendOpts = split ?? finalSendOpts;
+            currentSegment = createSegment(finalSendOpts);
+            if (!split) currentSegment.state = { ...initialState, blocks: pending };
+            log.info('outbound', split ? 'progress-segment-split' : 'progress-stream-renewed', {
               scope,
               mode: replyMode,
-              replyTo: split.replyTo,
+              replyTo: finalSendOpts.replyTo,
             });
           }
           currentSegment.state = advanceSegmentState(currentSegment.state, state, event);
