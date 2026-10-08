@@ -897,6 +897,10 @@ describe('agent-aware resume commands', () => {
 
   it('keeps a requested Codex resume pending until a concrete history thread is selected', async () => {
     const h = await createHarness('codex');
+    const codexHome = join(h.tmp.root, 'codex-home');
+    await mkdir(codexHome);
+    await writeFile(join(codexHome, 'freerouter.config.toml'), 'model_provider = "freerouter"\n');
+    h.controls.profileConfig.codex!.codexHome = codexHome;
     h.codexHistory.push(codexThread('thread-resume', 'resume me', 1_700_000_100_000));
 
     await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
