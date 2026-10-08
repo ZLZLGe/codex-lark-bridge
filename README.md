@@ -1,5 +1,8 @@
 # lark-channel-bridge
 
+> 本仓库由 [ZLZLGe](https://github.com/ZLZLGe/codex-lark-bridge) 维护，用于飞书操控本机 Codex。
+> 默认维护分支为 `codex`；上游来源、部署基线、验证和安装步骤见 [维护说明](./MAINTAINING.md)。
+
 把飞书 / Lark 消息接到本机的 Claude Code 或 Codex CLI。你可以在私聊、群聊、话题群和云文档评论里发任务，让本机 agent 读取项目、处理图片和文件、修改代码，并把过程与结果同步回飞书。
 
 **默认语言：中文。** [阅读 English README](./README.en.md)

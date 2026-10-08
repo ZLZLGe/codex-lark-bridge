@@ -1,5 +1,8 @@
 # lark-channel-bridge
 
+> Maintained by [ZLZLGe](https://github.com/ZLZLGe/codex-lark-bridge) for controlling local Codex from Feishu.
+> The maintained default branch is `codex`. See [MAINTAINING.md](./MAINTAINING.md) for upstream provenance, the deployed baseline, validation, and installation.
+
 Bridge Feishu / Lark messages to a locally installed Claude Code or Codex CLI. Send work from DMs, groups, topic groups, or supported cloud-document comments; the local agent reads files, handles attachments, edits code, and streams progress and results back to Feishu.
 
 **The repository homepage is Chinese.** [中文 README](./README.md)
